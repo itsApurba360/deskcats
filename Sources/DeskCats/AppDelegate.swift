@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
     private var addItem: NSMenuItem!
     private var countItem: NSMenuItem!
     private var sizeItems: [NSMenuItem] = []
+    private var styleItems: [NSMenuItem] = []
+    private var style: RenderStyle = Cat3DView.isSupported ? .threeD : .flat
     private var displayScale: CGFloat = 1
     /// The cat being carried, if any.
     private var dragged: CatView?
@@ -39,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
             displayScale = size.scale
             updateArea(for: screen)
         }
+        if let saved = Settings.style, saved != .threeD || Cat3DView.isSupported { style = saved }
         setUpStatusItem()
         // A first launch starts with a few cats in fresh coats.
         let coats: [Coat?] = Settings.coats ?? Array(repeating: nil, count: Self.startingCats)
@@ -134,7 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
         let start = CGPoint(x: .random(in: area.minX...area.maxX), y: area.floor + .random(in: 0...4))
         let cat = Cat(coat: coat, position: start, activity: Cat.Activity.roaming.randomElement()!,
                       area: area, displayScale: displayScale)
-        let view = CatView(cat: cat)
+        let view = CatView(cat: cat, style: style)
         view.delegate = self
         content.addSubview(view)
         cats.append(view)
@@ -164,6 +167,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
             view.cat.reclamp(to: area)
             view.syncFrame()
         }
+    }
+
+    @objc private func chooseStyle(_ sender: NSMenuItem) {
+        style = RenderStyle.allCases[sender.tag]
+        Settings.style = style
+        for item in styleItems { item.state = item === sender ? .on : .off }
+        for view in cats { view.style = style }
     }
 
     // MARK: - Dragging
@@ -223,9 +233,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
         let sizeItem = NSMenuItem(title: "Size", action: nil, keyEquivalent: "")
         sizeItem.submenu = sizeMenu
 
+        let styleMenu = NSMenu()
+        styleMenu.autoenablesItems = false
+        for (index, option) in RenderStyle.allCases.enumerated() {
+            let item = NSMenuItem(title: option.title, action: #selector(chooseStyle(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = index
+            item.state = option == style ? .on : .off
+            item.isEnabled = option != .threeD || Cat3DView.isSupported
+            styleMenu.addItem(item)
+            styleItems.append(item)
+        }
+        let styleItem = NSMenuItem(title: "Style", action: nil, keyEquivalent: "")
+        styleItem.submenu = styleMenu
+
         menu.addItem(addItem)
         menu.addItem(removeItem)
         menu.addItem(sizeItem)
+        menu.addItem(styleItem)
         menu.addItem(.separator())
         menu.addItem(countItem)
         menu.addItem(.separator())

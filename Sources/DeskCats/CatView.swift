@@ -9,7 +9,8 @@ protocol CatViewDelegate: AnyObject {
     func catViewWasClicked(_ view: CatView)
 }
 
-/// A small transparent view that follows one cat around the overlay and draws it.
+/// A small transparent view that follows one cat around the overlay and draws it,
+/// either flat or, through a `Cat3DView` subview, in 3D.
 @MainActor
 final class CatView: NSView {
     /// Overall drawing scale applied on top of each cat's own size.
@@ -26,17 +27,53 @@ final class CatView: NSView {
     private var dragging = false
     private var framesSinceDraw = 0
     private var drawnState: (Cat.Activity, Bool, Bool)?
+    private var scene: Cat3DView?
+    /// Draws the "z"s and hearts above the 3D cat.
+    private var floaters: FloaterView?
+
+    var style: RenderStyle = .flat {
+        didSet {
+            guard style != oldValue else { return }
+            applyStyle()
+        }
+    }
 
     private var anchor: CGPoint {
         CGPoint(x: Self.baseAnchor.x * cat.displayScale, y: Self.baseAnchor.y * cat.displayScale)
     }
 
-    init(cat: Cat) {
+    init(cat: Cat, style: RenderStyle) {
         self.cat = cat
+        self.style = style
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
+        // Size the view first so a 3D scene never starts with an empty drawable.
         syncFrame()
+        applyStyle()
+    }
+
+    private func applyStyle() {
+        scene?.removeFromSuperview()
+        floaters?.removeFromSuperview()
+        scene = nil
+        floaters = nil
+        if style == .threeD {
+            let scene = Cat3DView(coat: cat.coat)
+            scene.frame = bounds
+            scene.autoresizingMask = [.width, .height]
+            addSubview(scene)
+            let floaters = FloaterView(frame: bounds)
+            floaters.autoresizingMask = [.width, .height]
+            floaters.catView = self
+            addSubview(floaters)
+            self.scene = scene
+            self.floaters = floaters
+            scene.frame(anchor: anchor)
+            scene.update(from: cat)
+        }
+        drawnState = nil
+        needsDisplay = true
     }
 
     @available(*, unavailable)
@@ -48,7 +85,10 @@ final class CatView: NSView {
     func syncFrame() {
         let size = CGSize(width: Self.baseSize.width * cat.displayScale,
                           height: Self.baseSize.height * cat.displayScale)
-        if frame.size != size { setFrameSize(size) }
+        if frame.size != size {
+            setFrameSize(size)
+            scene?.frame(anchor: anchor)
+        }
         let origin = CGPoint(x: (cat.position.x - anchor.x).rounded(),
                              y: (cat.position.y - anchor.y).rounded())
         if frame.origin != origin { setFrameOrigin(origin) }
@@ -67,16 +107,31 @@ final class CatView: NSView {
         if framesSinceDraw >= interval || drawnState.map({ $0 != state }) ?? true {
             framesSinceDraw = 0
             drawnState = state
-            needsDisplay = true
+            if let scene {
+                scene.update(from: cat)
+                if Floaters.shows(for: pose) || floaters?.showing == true { floaters?.needsDisplay = true }
+            } else {
+                needsDisplay = true
+            }
         }
     }
 
-    override func draw(_ dirtyRect: NSRect) {
+    fileprivate var pose: CatPainter.Pose {
         let look = CGVector(dx: cat.facingRight ? cat.look.dx : -cat.look.dx, dy: cat.look.dy)
-        let pose = CatPainter.Pose(coat: cat.coat, activity: cat.activity, progress: cat.activityProgress,
-                                   legPhase: cat.legPhase, age: cat.age, blinking: cat.blinking, look: look,
-                                   swing: cat.facingRight ? cat.swing : -cat.swing)
-        Self.render(pose, scale: Self.baseScale * cat.scale, facingRight: cat.facingRight, at: anchor)
+        return CatPainter.Pose(coat: cat.coat, activity: cat.activity, progress: cat.activityProgress,
+                               legPhase: cat.legPhase, age: cat.age, blinking: cat.blinking, look: look,
+                               swing: cat.facingRight ? cat.swing : -cat.swing)
+    }
+
+    fileprivate var drawScale: CGFloat { Self.baseScale * cat.scale }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard scene == nil else { return }
+        Self.render(pose, scale: drawScale, facingRight: cat.facingRight, at: anchor)
+    }
+
+    fileprivate func drawFloaters() {
+        Floaters(pose: pose, scale: drawScale, facingRight: cat.facingRight, anchor: anchor).draw()
     }
 
     // MARK: - Accessibility
@@ -132,20 +187,24 @@ final class CatView: NSView {
         t.concat()
         CatPainter(pose: pose).paint()
         NSGraphicsContext.restoreGraphicsState()
+        Floaters(pose: pose, scale: scale, facingRight: facingRight, anchor: anchor).draw()
+    }
+}
 
-        let floaters = Floaters(pose: pose, scale: scale, facingRight: facingRight, anchor: anchor)
-        switch pose.activity {
-        case .sleep:
-            floaters.draw("z", count: 3, rate: 0.32, fill: NSColor(srgbRed: 0.93, green: 0.95, blue: 1, alpha: 1),
-                          edge: NSColor(srgbRed: 0.2, green: 0.24, blue: 0.4, alpha: 1))
-        case .purr:
-            floaters.draw("♥", count: 3, rate: 0.6, fill: Floaters.heartFill, edge: Floaters.heartEdge)
-        case .slowBlink where pose.progress > 0.6:
-            floaters.draw("♥", phase: Double((pose.progress - 0.6) / 0.4),
-                          fill: Floaters.heartFill, edge: Floaters.heartEdge)
-        default:
-            break
-        }
+/// Sits on top of a 3D cat and draws only its floating "z"s and hearts.
+@MainActor
+private final class FloaterView: NSView {
+    weak var catView: CatView?
+    /// Whether the last draw showed anything, so it gets cleared once afterwards.
+    private(set) var showing = false
+
+    override var isOpaque: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let catView else { return }
+        showing = Floaters.shows(for: catView.pose)
+        if showing { catView.drawFloaters() }
     }
 }
 
@@ -159,6 +218,29 @@ private struct Floaters {
     let scale: CGFloat
     let facingRight: Bool
     let anchor: CGPoint
+
+    static func shows(for pose: CatPainter.Pose) -> Bool {
+        switch pose.activity {
+        case .sleep, .purr: true
+        case .slowBlink: pose.progress > 0.6
+        default: false
+        }
+    }
+
+    func draw() {
+        switch pose.activity {
+        case .sleep:
+            draw("z", count: 3, rate: 0.32, fill: NSColor(srgbRed: 0.93, green: 0.95, blue: 1, alpha: 1),
+                 edge: NSColor(srgbRed: 0.2, green: 0.24, blue: 0.4, alpha: 1))
+        case .purr:
+            draw("♥", count: 3, rate: 0.6, fill: Floaters.heartFill, edge: Floaters.heartEdge)
+        case .slowBlink where pose.progress > 0.6:
+            draw("♥", phase: Double((pose.progress - 0.6) / 0.4),
+                 fill: Floaters.heartFill, edge: Floaters.heartEdge)
+        default:
+            break
+        }
+    }
 
     /// A repeating stream of `count` symbols.
     func draw(_ symbol: String, count: Int, rate: Double, fill: NSColor, edge: NSColor) {

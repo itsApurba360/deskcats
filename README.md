@@ -37,8 +37,8 @@ swift run      # build if needed, then launch the cats
 For the lowest CPU use, run an optimized build: `swift run -c release`.
 
 Three cats appear the first time the app starts. After that, DeskCats
-remembers how many cats you had, their coats, and the size you chose, so the
-same cats come back next launch. DeskCats has no Dock icon and no window of its
+remembers how many cats you had, their coats, the size, and the style you
+chose, so the same cats come back next launch. DeskCats has no Dock icon and no window of its
 own. You control it from the 🐱 item in the menu bar.
 
 ## The menu-bar item
@@ -51,6 +51,8 @@ Click the 🐱 in the menu bar:
 - **Remove a cat**: the most recently added cat leaves.
 - **Size**: Small, Medium (the default), or Large. This rescales every cat and
   its walking speed straight away.
+- **Style**: 3D (the default) draws round, softly lit cats with SceneKit; Flat
+  draws the original 2D cartoon cats. Switching takes effect straight away.
 - The greyed-out line shows how many cats are on your desk.
 - **Quit DeskCats** (⌘Q) closes the app. Pressing Ctrl-C in the terminal that
   ran `swift run`, or sending `kill`, also quits cleanly.
@@ -66,9 +68,15 @@ Click the 🐱 in the menu bar:
   are using.
 - `Cat` is a state machine with weighted random transitions and randomized
   durations. It stays inside the screen's visible frame.
-- `CatPainter` draws each cat with vector shapes. There are no image assets.
-- `CatView` draws one cat, handles the mouse, and floats the "z"s and hearts.
-  Resting cats are redrawn less often to keep CPU use low.
+- `CatPainter` draws each flat cat with vector shapes. There are no image assets.
+- `Cat3DView` builds each 3D cat from SceneKit spheres, cones, cylinders, and
+  capsules, and poses it every frame from the same `Cat` state. It uses a
+  transparent background and an orthographic camera, so the 3D cat lines up
+  with the flat cat's position and hit area.
+- `CatView` draws one cat (flat, or through its `Cat3DView`), handles the
+  mouse, and floats the "z"s and hearts. Resting cats are redrawn less often to
+  keep CPU use low.
+- `Settings` keeps the cats' coats, the size, and the style in `UserDefaults`.
 - `AppDelegate` runs everything on a 30 fps timer and owns the menu-bar item.
 
 Developer aid: `swift run DeskCats --render-sheet poses.png` writes every coat
