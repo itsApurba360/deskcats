@@ -35,8 +35,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
         updateArea(for: screen)
         window.orderFrontRegardless()
 
+        if let name = Settings.size, let size = Self.sizes.first(where: { $0.name == name }) {
+            displayScale = size.scale
+            updateArea(for: screen)
+        }
         setUpStatusItem()
-        for _ in 0..<Self.startingCats { addCat() }
+        // A first launch starts with a few cats in fresh coats.
+        let coats: [Coat?] = Settings.coats ?? Array(repeating: nil, count: Self.startingCats)
+        for coat in coats.prefix(Self.maxCats) { addCat(coat: coat) }
+        saveCats()
 
         let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -113,11 +120,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
 
     // MARK: - Cats
 
-    @objc private func addCat() {
+    @objc private func addCatFromMenu() {
+        addCat()
+        saveCats()
+    }
+
+    /// Adds a cat wearing `coat`, or a coat not already on screen where possible.
+    private func addCat(coat: Coat? = nil) {
         guard cats.count < Self.maxCats, let content = window.contentView else { return }
         let used = cats.map(\.cat.coat)
         let fresh = Coat.all.filter { !used.contains($0) }
-        let coat = (fresh.isEmpty ? Coat.all : fresh).randomElement()!
+        let coat = coat ?? (fresh.isEmpty ? Coat.all : fresh).randomElement()!
         let start = CGPoint(x: .random(in: area.minX...area.maxX), y: area.floor + .random(in: 0...4))
         let cat = Cat(coat: coat, position: start, activity: Cat.Activity.roaming.randomElement()!,
                       area: area, displayScale: displayScale)
@@ -133,10 +146,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
         if view === dragged { dragged = nil }
         view.removeFromSuperview()
         updateMenu()
+        saveCats()
+    }
+
+    /// Remembers which cats are on the desk so the same ones come back next launch.
+    private func saveCats() {
+        Settings.coats = cats.map(\.cat.coat)
     }
 
     @objc private func chooseSize(_ sender: NSMenuItem) {
         displayScale = Self.sizes[sender.tag].scale
+        Settings.size = Self.sizes[sender.tag].name
         for item in sizeItems { item.state = item === sender ? .on : .off }
         if let screen = mainScreen { updateArea(for: screen) }
         for view in cats {
@@ -180,7 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
 
         let menu = NSMenu()
         menu.autoenablesItems = false
-        addItem = NSMenuItem(title: "Add a cat", action: #selector(addCat), keyEquivalent: "")
+        addItem = NSMenuItem(title: "Add a cat", action: #selector(addCatFromMenu), keyEquivalent: "")
         addItem.target = self
         removeItem = NSMenuItem(title: "Remove a cat", action: #selector(removeCat), keyEquivalent: "")
         removeItem.target = self

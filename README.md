@@ -36,8 +36,10 @@ swift run      # build if needed, then launch the cats
 
 For the lowest CPU use, run an optimized build: `swift run -c release`.
 
-Three cats appear when the app starts. DeskCats has no Dock icon and no window
-of its own. You control it from the 🐱 item in the menu bar.
+Three cats appear the first time the app starts. After that, DeskCats
+remembers how many cats you had, their coats, and the size you chose, so the
+same cats come back next launch. DeskCats has no Dock icon and no window of its
+own. You control it from the 🐱 item in the menu bar.
 
 ## The menu-bar item
 
