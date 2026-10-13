@@ -13,7 +13,7 @@ sit, groom, stretch, yawn, nap (with little "z"s), loaf with their paws tucked,
 slow-blink at you, chase their tails, bat at a butterfly, hop, pounce, and
 scratch behind an ear. Their eyes follow your mouse pointer when it comes near.
 
-When you switch desktops or full-screen apps (or close one), the cats follow you: each one walks or runs in from the side of the screen back to its spot.
+When you switch desktops or full-screen apps (or close one), the cats stay put on the old one, then each one, after a moment's hesitation, walks or runs off the side toward you and comes in from the other side to its old spot. Now and then a cat wanders off to a neighbouring desktop for a while and comes back.
 
 ## Playing with the cats
 
@@ -62,8 +62,11 @@ Click the 🐱 in the menu bar:
 ## How it works
 
 - `OverlayWindow` is a borderless, transparent, shadowless, non-activating
-  panel the size of the main screen. It sits at status-bar level and appears on
-  every Space. It normally sets `ignoresMouseEvents`, so clicks reach whatever
+  panel the size of the main screen. It sits at status-bar level, above
+  full-screen apps too. There is one per Space the cats have visited, and each
+  stays on its own Space, so cats slide away with their desktop when you
+  swipe. `Spaces` reads the Space order from private CoreGraphics calls, so a
+  cat knows which edge to leave by. Each overlay normally sets `ignoresMouseEvents`, so clicks reach whatever
   is underneath. Each frame, `AppDelegate` checks whether the pointer is over a
   cat and accepts mouse events only then, so you can grab a cat without
   blocking anything else. Grabbing a cat never takes focus from the app you

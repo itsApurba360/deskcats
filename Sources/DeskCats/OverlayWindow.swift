@@ -2,6 +2,9 @@ import AppKit
 
 /// A transparent window covering the main screen that the cats live in.
 ///
+/// Each one belongs to a single Space, so cats slide away with their desktop
+/// when the user swipes to another one, just like ordinary windows.
+///
 /// It is click-through (`ignoresMouseEvents`) except while the cursor is over a
 /// cat; `AppDelegate` flips that each frame so a cat can be picked up.
 @MainActor
@@ -17,8 +20,8 @@ final class OverlayWindow: NSPanel {
         level = .statusBar
         // Every click, scroll, and drag passes straight through to the windows underneath.
         ignoresMouseEvents = true
-        // Joins every Space, including full-screen apps' Spaces.
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        // Stays on the Space it was shown on, which may be a full-screen app's.
+        collectionBehavior = [.fullScreenAuxiliary, .stationary, .ignoresCycle]
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
         let content = OverlayView(frame: CGRect(origin: .zero, size: screen.frame.size))

@@ -7,7 +7,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
     private static let maxCats = 24
     private static let sizes: [(name: String, scale: CGFloat)] = [("Small", 0.7), ("Medium", 1), ("Large", 1.45)]
 
-    private var window: OverlayWindow!
+    /// One overlay per Space the cats have been on. Each stays on its own Space.
+    private var windows: [UInt64: OverlayWindow] = [:]
+    /// The Space on screen, and every Space left to right, as last seen.
+    private var activeSpace: UInt64 = 0
+    private var spaceOrder: [UInt64] = []
+    /// Stands in for Space IDs if the system won't say which Space is showing.
+    private var guessedSpace: UInt64 = 1
     private var statusItem: NSStatusItem!
     private var removeItem: NSMenuItem!
     private var addItem: NSMenuItem!
@@ -33,9 +39,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
             NSApp.terminate(nil)
             return
         }
-        window = OverlayWindow(screen: screen) { [weak self] point in self?.catView(at: point) }
+        activeSpace = Spaces.active ?? guessedSpace
+        spaceOrder = Spaces.ordered ?? []
         updateArea(for: screen)
-        window.orderFrontRegardless()
+        showWindow(on: activeSpace)
 
         if let name = Settings.size, let size = Self.sizes.first(where: { $0.name == name }) {
             displayScale = size.scale
@@ -78,11 +85,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
         let dt = min(now - lastTick, 0.1)
         lastTick = now
         let mouse = NSEvent.mouseLocation
-        let local = CGPoint(x: mouse.x - window.frame.minX, y: mouse.y - window.frame.minY)
+        let origin = mainScreen?.frame.origin ?? .zero
+        let local = CGPoint(x: mouse.x - origin.x, y: mouse.y - origin.y)
         for view in cats {
             view.cat.update(dt: dt, area: area, mouse: local)
+            if view.cat.hasLeftForSpace { arrive(view) }
             view.syncFrame()
         }
+        maybeWander(dt: dt)
         updateClickThrough(mouse: local)
     }
 
@@ -96,17 +106,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
         }
         // Never switch mid-press: that would cut a drag (ours or another app's) short.
         guard NSEvent.pressedMouseButtons == 0, dragged == nil else { return }
-        let overCat = catView(at: mouse) != nil
-        if window.ignoresMouseEvents == overCat {
-            window.ignoresMouseEvents = !overCat
+        for (space, window) in windows {
+            let overCat = catView(at: mouse, on: space) != nil
+            if window.ignoresMouseEvents == overCat {
+                window.ignoresMouseEvents = !overCat
+            }
         }
     }
 
-    /// The front-most cat whose body is under `point` (overlay coordinates).
-    private func catView(at point: CGPoint) -> CatView? {
-        if let dragged { return dragged }
+    /// The front-most cat on `space` whose body is under `point` (overlay coordinates).
+    private func catView(at point: CGPoint, on space: UInt64) -> CatView? {
+        if let dragged { return dragged.space == space ? dragged : nil }
         return cats
-            .filter { $0.cat.hitRect.contains(point) }
+            .filter { $0.space == space && $0.superview != nil && $0.cat.hitRect.contains(point) }
             .min { $0.cat.position.y < $1.cat.position.y }
     }
 
@@ -118,7 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
 
     @objc private func screensChanged() {
         guard let screen = mainScreen else { return }
-        window.setFrame(screen.frame, display: false)
+        for window in windows.values { window.setFrame(screen.frame, display: false) }
         updateArea(for: screen)
         for view in cats {
             view.cat.reclamp(to: area)
@@ -127,13 +139,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
         spaceChanged()
     }
 
-    /// The cats follow the user onto the Space they just landed on, walking or
-    /// running in from the side, a moment apart.
+    // MARK: - Spaces
+
+    /// Shows an overlay on `space`, which must be the Space on screen right now:
+    /// a new window joins whichever Space is showing and then stays there.
+    @discardableResult
+    private func showWindow(on space: UInt64) -> OverlayWindow? {
+        if let window = windows[space] { return window }
+        guard let screen = mainScreen else { return nil }
+        let window = OverlayWindow(screen: screen) { [weak self] point in self?.catView(at: point, on: space) }
+        window.orderFrontRegardless()
+        windows[space] = window
+        return window
+    }
+
+    /// The user moved to another Space. Every cat elsewhere hesitates a moment,
+    /// then walks or runs off its screen toward the new Space and comes in from
+    /// the other side once it has covered the distance.
     @objc private func spaceChanged() {
-        for view in cats where view !== dragged {
-            view.cat.arrive(area: area, delay: .random(in: 0...0.9))
-            view.syncFrame()
+        let previousOrder = spaceOrder
+        if let id = Spaces.active {
+            activeSpace = id
+        } else {
+            // Without the system's answer every switch looks like a new Space.
+            guessedSpace += 1
+            activeSpace = guessedSpace
         }
+        spaceOrder = Spaces.ordered ?? []
+
+        // A closed full-screen app or removed desktop takes its overlay with it.
+        // Its cats carry on out of sight and still have to make the trip.
+        if !spaceOrder.isEmpty {
+            for (space, window) in windows where space != activeSpace && !spaceOrder.contains(space) {
+                for view in cats where view.space == space { view.removeFromSuperview() }
+                window.close()
+                windows[space] = nil
+            }
+        }
+        showWindow(on: activeSpace)
+
+        for view in cats where view !== dragged {
+            if view.space == activeSpace {
+                // Back where it started: a cat still on its way out turns around.
+                view.destination = nil
+                view.cat.comeBack(area: area)
+                continue
+            }
+            view.destination = activeSpace
+            let direction = direction(from: view.space, to: activeSpace, previousOrder: previousOrder)
+            // Some cats follow at once, others dawdle for a few seconds.
+            let delay = Double.random(in: 0...1) < 0.3 ? 0 : .random(in: 0.2...3.5)
+            view.cat.setOff(direction: direction, delay: delay, area: area)
+        }
+    }
+
+    /// +1 if `to` is to the right of `from` in the trackpad order, -1 if left.
+    private func direction(from: UInt64, to: UInt64, previousOrder: [UInt64]) -> CGFloat {
+        for order in [spaceOrder, previousOrder] {
+            if let i = order.firstIndex(of: from), let j = order.firstIndex(of: to), i != j {
+                return j > i ? 1 : -1
+            }
+        }
+        // A Space that has gone: compare where it was with where the new one is.
+        if let i = previousOrder.firstIndex(of: from), let j = spaceOrder.firstIndex(of: to) {
+            return j >= i ? 1 : -1
+        }
+        // No order at all: a stable guess for this pair.
+        return from < to ? 1 : -1
+    }
+
+    /// A cat that has walked off its old Space steps onto the one it was heading for.
+    private func arrive(_ view: CatView) {
+        // If that Space has gone since, it comes to the one on screen instead.
+        let space = view.destination.flatMap { windows[$0] != nil ? $0 : nil } ?? activeSpace
+        guard let content = windows[space]?.contentView else { return }
+        if view.superview !== content {
+            view.removeFromSuperview()
+            content.addSubview(view)
+        }
+        view.space = space
+        view.destination = nil
+        view.cat.enter(area: area)
+    }
+
+    /// Rarely, one cat wanders off to a neighbouring desktop and comes back later.
+    /// At least one cat always stays behind.
+    private func maybeWander(dt: TimeInterval) {
+        guard Double.random(in: 0..<1) < dt / 240 else { return }
+        let home = cats.filter { $0.space == activeSpace && !$0.cat.isTravelling && $0 !== dragged }
+        guard home.count >= 2, let view = home.randomElement() else { return }
+        view.cat.wander(area: area)
     }
 
     // MARK: - Cats
@@ -145,7 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
 
     /// Adds a cat wearing `coat`, or a coat not already on screen where possible.
     private func addCat(coat: Coat? = nil) {
-        guard cats.count < Self.maxCats, let content = window.contentView else { return }
+        guard cats.count < Self.maxCats, let content = showWindow(on: activeSpace)?.contentView else { return }
         let used = cats.map(\.cat.coat)
         let fresh = Coat.all.filter { !used.contains($0) }
         let coat = coat ?? (fresh.isEmpty ? Coat.all : fresh).randomElement()!
@@ -153,6 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
         let cat = Cat(coat: coat, position: start, activity: Cat.Activity.roaming.randomElement()!,
                       area: area, displayScale: displayScale)
         let view = CatView(cat: cat, style: style)
+        view.space = activeSpace
         view.delegate = self
         content.addSubview(view)
         cats.append(view)
@@ -195,6 +291,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
 
     func catViewDidStartDrag(_ view: CatView, at point: CGPoint) {
         dragged = view
+        // Picked up mid-trip, it stays on this Space.
+        view.destination = nil
         lastDragTime = CACurrentMediaTime()
         view.cat.grab(at: point)
         view.syncFrame()

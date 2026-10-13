@@ -30,7 +30,7 @@ struct RoamArea {
 final class Cat {
     enum Activity: CaseIterable {
         case walk, idle, sit, sleep, stretch, groom
-        /// A quick dash, used when a cat comes back onto a newly shown Space.
+        /// A quick dash, used when a cat travels to another Space.
         case run
         case loaf, chaseTail, bat, slowBlink, yawn, hop, pounce, scratch
         /// Reaction to being clicked.
@@ -86,10 +86,22 @@ final class Cat {
     private var fallTarget: CGFloat?
     private var heldVelocity: CGFloat = 0
     private var swingSpeed: CGFloat = 0
-    /// True while the cat travels back in from off screen after a Space change.
-    private var arriving = false
-    /// Seconds an arriving cat waits off screen, so cats don't come in in lockstep.
-    private var arrivalDelay: TimeInterval = 0
+    /// A trip off one side of the screen, toward another Space, and back to `home`.
+    private struct Trip {
+        /// The spot the cat returns to once it is back on screen.
+        var home: CGPoint
+        /// +1 heading off the right edge, -1 the left.
+        var direction: CGFloat
+        var leaving = true
+        /// A wander to a neighbouring desktop: the cat comes back in the side it left.
+        var excursion = false
+        /// How long a wandering cat stays away once it is off screen.
+        var away: TimeInterval = 0
+    }
+    private var trip: Trip?
+    /// Seconds the cat hesitates before setting off.
+    private var tripDelay: TimeInterval = 0
+    private var tripRunning = false
 
     var activityProgress: CGFloat { CGFloat(min(1, activityTime / activityDuration)) }
     var isHeld: Bool { activity == .held }
@@ -121,8 +133,8 @@ final class Cat {
 
         switch activity {
         case .walk, .run:
-            if arrivalDelay > 0 {
-                arrivalDelay -= dt
+            if tripDelay > 0 {
+                tripDelay -= dt
                 activityTime = 0
                 break
             }
@@ -137,8 +149,16 @@ final class Cat {
                 legPhase += step * (activity == .run ? 0.13 : 0.2) / scale
             }
             if abs(dx) > 0.5 { facingRight = dx > 0 }
-            if distance < 1 || activityTime >= activityDuration {
-                arriving = false
+            if let current = trip {
+                // Off screen: a wandering cat waits out its time away, then comes back.
+                if current.leaving, current.excursion, distance < 1 {
+                    trip?.away -= dt
+                    if current.away <= 0 { enter(area: area) }
+                } else if !current.leaving, distance < 1 {
+                    trip = nil
+                    begin(pickNext(), area: area)
+                }
+            } else if distance < 1 || activityTime >= activityDuration {
                 begin(pickNext(), area: area)
             }
         case .hop, .pounce:
@@ -146,13 +166,13 @@ final class Cat {
             let end: CGFloat = activity == .pounce ? 0.85 : 1
             let t = min(max((activityProgress - start) / (end - start), 0), 1)
             position.x = leapStartX + leapLength * t
-            if activityTime >= activityDuration { begin(pickNext(), area: area) }
+            if activityTime >= activityDuration { carryOn(area: area) }
         case .chaseTail:
             if age >= nextSpin {
                 facingRight.toggle()
                 nextSpin = age + .random(in: 0.28...0.45)
             }
-            if activityTime >= activityDuration { begin(pickNext(), area: area) }
+            if activityTime >= activityDuration { carryOn(area: area) }
         case .held:
             updateSwing(dt: dt, target: max(-0.7, min(0.7, -heldVelocity * 0.0025)))
             heldVelocity *= 0.85
@@ -171,10 +191,10 @@ final class Cat {
                 land(area: area)
             }
         default:
-            if activityTime >= activityDuration { begin(pickNext(), area: area) }
+            if activityTime >= activityDuration { carryOn(area: area) }
         }
 
-        if activity != .held && activity != .falling && !arriving {
+        if activity != .held && activity != .falling && trip == nil {
             position = area.clamp(position)
         }
         updateLook(dt: dt, mouse: mouse)
@@ -183,37 +203,107 @@ final class Cat {
     /// Keeps the cat on screen after the display arrangement or size changes.
     func reclamp(to area: RoamArea) {
         guard activity != .held && activity != .falling else { return }
-        // An arriving cat is meant to be off screen until it walks back in.
-        if !arriving { position = area.clamp(position) }
+        // A travelling cat may be off screen on purpose; only its spot moves.
+        if let current = trip {
+            trip?.home = area.clamp(current.home)
+            if !current.leaving { target = area.clamp(current.home) }
+            return
+        }
+        position = area.clamp(position)
         target = area.clamp(target)
     }
 
-    /// Follows the user onto a newly shown Space: the cat jumps to just past the
-    /// nearer side edge, then walks or runs back to where it was after `delay` seconds.
-    func arrive(area: RoamArea, delay: TimeInterval) {
+    // MARK: - Travelling between Spaces
+
+    var isTravelling: Bool { trip != nil }
+    var isOnExcursion: Bool { trip?.excursion == true }
+    /// Off screen after heading for another Space, ready to come in on the next one.
+    var hasLeftForSpace: Bool {
+        guard let trip, trip.leaving, !trip.excursion else { return false }
+        return activity == .walk || activity == .run ? abs(target.x - position.x) < 1 : false
+    }
+
+    /// Heads off the screen edge toward the Space the user moved to, after
+    /// hesitating for `delay` seconds. It keeps its spot for when it gets there.
+    func setOff(direction: CGFloat, delay: TimeInterval, area: RoamArea) {
         guard activity != .held else { return }
-        // A cat already on its way in keeps heading for the same spot.
-        let home = area.clamp(arriving ? target : position)
-        let offset = 60 * CatView.baseScale * scale
-        let fromLeft = home.x < area.screen.midX
-        position = CGPoint(x: fromLeft ? area.screen.minX - offset : area.screen.maxX + offset, y: home.y)
-        facingRight = fromLeft
-        arriving = true
-        arrivalDelay = delay
-        let running = Bool.random()
-        activity = running ? .run : .walk
+        let alreadyGoing = trip != nil && trip?.excursion == false
+        let home = trip?.home ?? area.clamp(position)
+        trip = Trip(home: home, direction: direction)
+        if !alreadyGoing {
+            tripDelay = delay
+            tripRunning = Bool.random()
+        }
+        startTrip(area: area)
+    }
+
+    /// Now and then a cat wanders off to a neighbouring desktop for a while.
+    func wander(area: RoamArea) {
+        guard trip == nil, Activity.roaming.contains(activity) else { return }
+        let direction: CGFloat = Bool.random() ? 1 : -1
+        trip = Trip(home: area.clamp(position), direction: direction, excursion: true,
+                    away: .random(in: 20...90))
+        tripDelay = 0
+        tripRunning = Double.random(in: 0...1) < 0.25
+        startTrip(area: area)
+    }
+
+    /// The user came back to this Space mid-trip: the cat turns around and goes home.
+    func comeBack(area: RoamArea) {
+        guard let current = trip, current.leaving, !current.excursion else { return }
+        trip?.leaving = false
+        trip?.direction = -current.direction
+        tripDelay = 0
+        startTrip(area: area)
+    }
+
+    /// Steps in from off screen on the Space it was heading for (or back from a
+    /// wander), then walks to its spot.
+    func enter(area: RoamArea) {
+        guard let current = trip, current.leaving else { return }
+        // Moving right, it left through the right edge and comes in through the
+        // left one; a wanderer comes back through the edge it left by.
+        let fromLeft = current.excursion ? current.direction < 0 : current.direction > 0
+        let offset = edgeOffset
+        position = CGPoint(x: fromLeft ? area.screen.minX - offset : area.screen.maxX + offset, y: position.y)
+        trip?.leaving = false
+        trip?.home = area.clamp(current.home)
+        tripDelay = 0
+        startTrip(area: area)
+    }
+
+    /// How far past the edge a cat must be to be fully out of sight.
+    private var edgeOffset: CGFloat { 60 * CatView.baseScale * scale }
+
+    private func startTrip(area: RoamArea) {
+        guard let trip else { return }
+        if trip.leaving {
+            let x = trip.direction > 0 ? area.screen.maxX + edgeOffset : area.screen.minX - edgeOffset
+            target = CGPoint(x: x, y: position.y)
+        } else {
+            target = trip.home
+        }
+        activity = tripRunning ? .run : .walk
         activityTime = 0
-        target = home
-        walkSpeed = baseSpeed * (running ? 4 : 2)
-        activityDuration = Double(abs(home.x - position.x) / (walkSpeed * displayScale)) + 2
+        walkSpeed = baseSpeed * (tripRunning ? 4 : 2)
+        activityDuration = .infinity
+    }
+
+    /// After a pause (petting, say), a travelling cat picks up its trip again.
+    private func carryOn(area: RoamArea) {
+        if trip != nil {
+            startTrip(area: area)
+        } else {
+            begin(pickNext(), area: area)
+        }
     }
 
     // MARK: - Mouse
 
     /// Picks the cat up so it dangles from the cursor at `scruff`.
     func grab(at scruff: CGPoint) {
-        arriving = false
-        arrivalDelay = 0
+        trip = nil
+        tripDelay = 0
         activity = .held
         activityTime = 0
         activityDuration = 1
@@ -242,8 +332,8 @@ final class Cat {
 
     /// A click without a drag: the cat purrs and shows hearts.
     func pet(area: RoamArea) {
-        arriving = false
-        arrivalDelay = 0
+        // A travelling cat stops where it is to purr, then carries on.
+        tripDelay = 0
         begin(.purr, area: area)
     }
 
@@ -259,7 +349,7 @@ final class Cat {
             let distance = hypot(target.x - position.x, target.y - position.y)
             activityDuration = Double(distance / (walkSpeed * displayScale)) + 2
         case .run:
-            // Only `arrive` starts a run; it sets the target and speed itself.
+            // Only a trip starts a run; it sets the target and speed itself.
             activityDuration = 1
         case .idle: activityDuration = .random(in: 1.5...5)
         case .sit: activityDuration = .random(in: 4...12)

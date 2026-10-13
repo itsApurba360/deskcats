@@ -23,6 +23,10 @@ final class CatView: NSView {
 
     let cat: Cat
     weak var delegate: CatViewDelegate?
+    /// The Space whose overlay this cat is on.
+    var space: UInt64 = 0
+    /// The Space this cat is travelling to, if any.
+    var destination: UInt64?
     private var pressPoint: CGPoint?
     private var dragging = false
     private var framesSinceDraw = 0
