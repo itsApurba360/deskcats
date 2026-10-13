@@ -4,13 +4,15 @@ import AppKit
 /// pose into one image, so the drawing can be checked without the overlay.
 @MainActor
 enum PoseSheet {
-    private static let poses: [(Cat.Activity, CGFloat, Bool)] = [
-        (.walk, 0, true), (.walk, 0, false), (.idle, 0, true), (.sit, 0, true),
-        (.groom, 0, true), (.stretch, 0.5, true), (.sleep, 0, true),
+    private static let poses: [(Cat.Activity, CGFloat, CGFloat)] = [
+        (.walk, 0, 0.9), (.idle, 0, 0), (.sit, 0, 0), (.groom, 0, 0), (.stretch, 0.5, 0),
+        (.sleep, 0, 0), (.loaf, 0, 0), (.chaseTail, 0, 0), (.bat, 0, 0), (.slowBlink, 0.8, 0),
+        (.yawn, 0.5, 0), (.hop, 0.5, 0), (.pounce, 0.3, 0), (.pounce, 0.7, 0), (.scratch, 0, 0),
+        (.purr, 0, 0), (.held, 0, 0),
     ]
 
     static func write(to path: String) -> Bool {
-        let cell = CGSize(width: 150, height: 120)
+        let cell = CGSize(width: 150, height: 150)
         let pixelScale: CGFloat = 2
         let size = CGSize(width: cell.width * CGFloat(poses.count), height: cell.height * CGFloat(Coat.all.count))
         guard let rep = NSBitmapImageRep(
@@ -30,7 +32,7 @@ enum PoseSheet {
                 NSColor(srgbRed: shade * 0.8, green: shade * 0.88, blue: shade, alpha: 1).setFill()
                 CGRect(origin: origin, size: cell).fill()
                 let pose = CatPainter.Pose(coat: coat, activity: entry.0, progress: entry.1,
-                                           legPhase: entry.2 ? 0.9 : 0, age: 1.3, blinking: false,
+                                           legPhase: entry.2, age: 1.3, blinking: false,
                                            look: CGVector(dx: 0.4, dy: 0.2))
                 CatView.render(pose, scale: CatView.baseScale, facingRight: true,
                                at: CGPoint(x: origin.x + cell.width / 2, y: origin.y + 14))

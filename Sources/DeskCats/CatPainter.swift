@@ -17,9 +17,11 @@ struct CatPainter {
         var blinking: Bool
         /// Pupil direction in cat space (+x is forward).
         var look: CGVector
+        /// Pendulum angle while dangling from the cursor.
+        var swing: CGFloat = 0
     }
 
-    enum Eyes { case open, sleepy, happy }
+    enum Eyes { case open, half, sleepy, happy }
 
     let pose: Pose
     private let coat: Coat
@@ -38,19 +40,57 @@ struct CatPainter {
     // MARK: - Poses
 
     func paint() {
-        shadow(width: pose.activity == .sleep ? 58 : 52)
+        let p = pose.progress
         switch pose.activity {
-        case .walk: paintStanding(walking: true, bow: 0)
-        case .idle: paintStanding(walking: false, bow: 0)
-        case .stretch: paintStanding(walking: false, bow: stretchAmount)
-        case .sit: paintSitting(grooming: false)
-        case .groom: paintSitting(grooming: true)
-        case .sleep: paintSleeping()
+        case .held, .falling:
+            paintHeld()
+            return
+        case .sleep, .loaf:
+            shadow(width: 58)
+        default:
+            shadow(width: 52)
+        }
+
+        switch pose.activity {
+        case .walk:
+            paintStanding(Stance(walking: true, legPhase: pose.legPhase))
+        case .idle:
+            paintStanding(Stance())
+        case .stretch:
+            let bow = stretchAmount
+            paintStanding(Stance(bow: bow, eyes: bow > 0.3 ? .happy : nil,
+                                 yawning: bow > 0.6 && (0.38...0.66).contains(p)))
+        case .chaseTail:
+            paintStanding(Stance(walking: true, legPhase: CGFloat(pose.age * 14),
+                                 lift: abs(CGFloat(sin(pose.age * 9))) * 2.5, tailCurl: 1))
+        case .hop:
+            let arc = sin(p * .pi)
+            paintStanding(Stance(tuck: arc, lift: arc * 16))
+        case .pounce:
+            paintStanding(pounceStance(p))
+        case .sit: paintSitting(.plain)
+        case .groom: paintSitting(.groom)
+        case .bat: paintSitting(.bat)
+        case .slowBlink: paintSitting(.slowBlink)
+        case .yawn: paintSitting(.yawn)
+        case .scratch: paintSitting(.scratch)
+        case .purr: paintSitting(.purr)
+        case .sleep: paintLying(sleeping: true)
+        case .loaf: paintLying(sleeping: false)
+        case .held, .falling: break
         }
     }
 
-    /// Where the sleeping head sits, so the view can float "z"s above it.
-    static let sleepingHead = CGPoint(x: 17, y: 15)
+    /// Where the head sits in a pose, so the view can float "z"s and hearts above it.
+    static func headPoint(for activity: Cat.Activity) -> CGPoint {
+        switch activity {
+        case .sleep: CGPoint(x: 17, y: 15)
+        case .loaf: CGPoint(x: 14, y: 27)
+        case .held, .falling: CGPoint(x: 0, y: 49)
+        case .sit, .groom, .bat, .slowBlink, .yawn, .scratch, .purr: CGPoint(x: 6, y: 42)
+        default: CGPoint(x: 22, y: 34)
+        }
+    }
 
     private var stretchAmount: CGFloat {
         let p = pose.progress
@@ -61,39 +101,94 @@ struct CatPainter {
 
     private var tailSway: CGFloat { CGFloat(sin(pose.age * 1.6)) * 4 }
 
-    private func paintStanding(walking: Bool, bow: CGFloat) {
-        let phase = pose.legPhase
-        let bob = walking ? abs(sin(phase)) * 1.4 : CGFloat(sin(pose.age * 2.2)) * 0.4
-        let hipY = 20 + bob + bow * 4
-        let shoulderY = 20 + bob - bow * 9
-        let hip = CGPoint(x: -13, y: hipY)
-        let shoulder = CGPoint(x: 13, y: shoulderY)
+    // MARK: Standing
 
-        func foot(_ x: CGFloat, _ phase: CGFloat) -> CGPoint {
-            guard walking else { return CGPoint(x: x, y: 3) }
-            return CGPoint(x: x + sin(phase) * 7, y: 3 + max(0, cos(phase)) * 3.5)
+    /// Knobs for every four-legged pose.
+    private struct Stance {
+        var walking = false
+        var legPhase: CGFloat = 0
+        /// Stretch: front end down, rear up.
+        var bow: CGFloat = 0
+        /// Pounce wind-up: whole body low to the ground.
+        var crouch: CGFloat = 0
+        /// Mid-leap: front legs reach forward, back legs push back.
+        var leap: CGFloat = 0
+        /// Hop: feet pulled up under the body.
+        var tuck: CGFloat = 0
+        /// Height above the ground.
+        var lift: CGFloat = 0
+        /// Chasing its tail: the tail curls forward toward the head.
+        var tailCurl: CGFloat = 0
+        /// Sideways shuffle of the hips before a pounce.
+        var wiggle: CGFloat = 0
+        var eyes: Eyes?
+        var yawning = false
+    }
+
+    private func pounceStance(_ p: CGFloat) -> Stance {
+        if p < 0.55 {
+            let wiggle = p > 0.2 ? CGFloat(sin(pose.age * 22)) * 1.6 : 0
+            return Stance(crouch: ease(p / 0.15), wiggle: wiggle)
         }
-        let reach = bow * 13
+        if p < 0.85 {
+            let t = (p - 0.55) / 0.3
+            let arc = sin(t * .pi)
+            return Stance(leap: arc, lift: arc * 22)
+        }
+        return Stance(crouch: 0.5 * (1 - (p - 0.85) / 0.15))
+    }
+
+    private func paintStanding(_ s: Stance) {
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        if s.lift != 0 {
+            let t = NSAffineTransform()
+            t.translateX(by: 0, yBy: s.lift)
+            t.concat()
+        }
+
+        let phase = s.legPhase
+        let bob = s.walking ? abs(sin(phase)) * 1.4 : CGFloat(sin(pose.age * 2.2)) * 0.4
+        let hipY = 20 + bob + s.bow * 4 - s.crouch * 7
+        let shoulderY = 20 + bob - s.bow * 9 - s.crouch * 6
+        let hip = CGPoint(x: -13 + s.wiggle, y: hipY)
+        let shoulder = CGPoint(x: 13, y: shoulderY)
+        let reach = s.bow * 13
+
+        func foot(_ x: CGFloat, _ phase: CGFloat, front: Bool) -> CGPoint {
+            var p = CGPoint(x: x, y: 3 + s.tuck * 8)
+            if s.walking {
+                p.x += sin(phase) * 7
+                p.y += max(0, cos(phase)) * 3.5
+            }
+            p.x += s.leap * (front ? 11 : -9)
+            p.y += s.leap * (front ? 6 : 4)
+            return p
+        }
 
         // Tail first: it sits behind everything.
         let tailBase = CGPoint(x: hip.x - 8, y: hipY + 3)
-        let lift = walking ? 0 : bow * 6
+        let lift = s.walking ? 0 : s.bow * 6
+        let twitch = s.crouch * CGFloat(sin(pose.age * 12)) * 3
+        let curl = s.tailCurl
         tail(from: tailBase,
-             c1: CGPoint(x: tailBase.x - 10, y: tailBase.y + 4),
-             c2: CGPoint(x: tailBase.x - 15 + tailSway * 0.3, y: tailBase.y + 18 + lift),
-             to: CGPoint(x: tailBase.x - 8 + tailSway, y: tailBase.y + 28 + lift))
+             c1: CGPoint(x: tailBase.x - 10 + curl * 2, y: tailBase.y + 4 + curl * 12),
+             c2: CGPoint(x: tailBase.x - 15 + tailSway * 0.3 + curl * 22, y: tailBase.y + 18 + lift + curl * 10 - s.crouch * 10),
+             to: CGPoint(x: tailBase.x - 8 + tailSway + twitch + curl * 40,
+                         y: tailBase.y + 28 + lift - curl * 6 - s.crouch * 22))
 
         // Far legs, shaded darker.
         let far = coat.base.darker(0.1)
         let farPaw = coat.paws.darker(0.1)
-        leg(from: CGPoint(x: shoulder.x + 3, y: shoulderY - 4), to: foot(shoulder.x + 3 + reach, phase + .pi),
+        leg(from: CGPoint(x: shoulder.x + 3, y: shoulderY - 4),
+            to: foot(shoulder.x + 3 + reach, phase + .pi, front: true), color: far, paw: farPaw)
+        leg(from: CGPoint(x: hip.x + 3, y: hipY - 4), to: foot(hip.x + 3, phase, front: false),
             color: far, paw: farPaw)
-        leg(from: CGPoint(x: hip.x + 3, y: hipY - 4), to: foot(hip.x + 3, phase), color: far, paw: farPaw)
 
         // Body: an ellipse tilted from hip to shoulder.
         let tilt = atan2(shoulderY - hipY, shoulder.x - hip.x)
-        let center = CGPoint(x: 0, y: (hipY + shoulderY) / 2 + 2)
-        let body = ellipse(center: center, width: 46, height: 24, rotation: tilt)
+        let center = CGPoint(x: (hip.x + shoulder.x) / 2, y: (hipY + shoulderY) / 2 + 2)
+        let body = ellipse(center: center, width: 46 + s.leap * 6, height: 24 - s.leap * 2, rotation: tilt)
         blob(body) { rect in
             if let chest = coat.chest {
                 chest.color.setFill()
@@ -102,21 +197,34 @@ struct CatPainter {
         }
 
         // Near legs.
-        leg(from: CGPoint(x: shoulder.x, y: shoulderY - 4), to: foot(shoulder.x + reach, phase),
+        leg(from: CGPoint(x: shoulder.x, y: shoulderY - 4), to: foot(shoulder.x + reach, phase, front: true),
             color: coat.base.color, paw: coat.paws.color)
-        leg(from: CGPoint(x: hip.x, y: hipY - 4), to: foot(hip.x, phase + .pi),
+        leg(from: CGPoint(x: hip.x, y: hipY - 4), to: foot(hip.x, phase + .pi, front: false),
             color: coat.base.color, paw: coat.paws.color)
 
-        let yawning = bow > 0.6 && (0.38...0.66).contains(pose.progress)
-        head(center: CGPoint(x: 22 + bow * 6, y: 34 + bob - bow * 13),
-             radius: 13, tilt: -bow * 0.12,
-             eyes: bow > 0.3 ? .happy : (pose.blinking ? .sleepy : .open),
-             yawning: yawning)
+        head(center: CGPoint(x: 22 + s.bow * 6 + s.leap * 4, y: 34 + bob - s.bow * 13 - s.crouch * 7),
+             radius: 13, tilt: -s.bow * 0.12,
+             eyes: s.eyes ?? (pose.blinking ? .sleepy : .open),
+             yawning: s.yawning)
     }
 
-    private func paintSitting(grooming: Bool) {
+    // MARK: Sitting
+
+    private enum SitStyle { case plain, groom, bat, slowBlink, yawn, scratch, purr }
+
+    private func paintSitting(_ style: SitStyle) {
+        let p = pose.progress
         let breath = CGFloat(sin(pose.age * 2)) * 0.6
         let lick = CGFloat(sin(pose.age * 9))
+
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        if style == .purr {
+            // A tiny contented rumble.
+            let t = NSAffineTransform()
+            t.translateX(by: CGFloat(sin(pose.age * 40)) * 0.35, yBy: 0)
+            t.concat()
+        }
 
         // Haunch and torso.
         blob(ellipse(center: CGPoint(x: -8, y: 12), width: 30, height: 23))
@@ -128,12 +236,20 @@ struct CatPainter {
                 ellipse(center: CGPoint(x: rect.maxX - 9, y: rect.midY + 2), width: 14, height: 24).fill()
             }
         }
-        paw(at: CGPoint(x: -4, y: 3), color: coat.paws.color)
+        if style == .scratch {
+            // Hind leg up behind the ear, going like the clappers.
+            let jitter = CGFloat(sin(pose.age * 26)) * 2
+            leg(from: CGPoint(x: -12, y: 12), to: CGPoint(x: -9 + jitter, y: 39 + jitter),
+                color: coat.base.color, paw: coat.paws.color)
+        } else {
+            paw(at: CGPoint(x: -4, y: 3), color: coat.paws.color)
+        }
 
-        // Front legs; when grooming, the near one is lifted to the mouth.
+        // Front legs; grooming and batting lift the near one.
         leg(from: CGPoint(x: 8, y: 18), to: CGPoint(x: 8, y: 3),
             color: coat.base.darker(0.1), paw: coat.paws.darker(0.1))
-        if !grooming {
+        let pawRaised = style == .groom || style == .bat
+        if !pawRaised {
             leg(from: CGPoint(x: 13, y: 18), to: CGPoint(x: 13, y: 3),
                 color: coat.base.color, paw: coat.paws.color)
         }
@@ -145,30 +261,119 @@ struct CatPainter {
              c2: CGPoint(x: 8, y: -2),
              to: CGPoint(x: 21, y: 4 + sway))
 
-        let headCenter = CGPoint(x: 6, y: 42 + breath * 0.4)
-        head(center: headCenter, radius: 13.5,
-             tilt: grooming ? -0.16 : 0,
-             eyes: grooming ? .happy : (pose.blinking ? .sleepy : .open),
-             yawning: false)
+        var eyes: Eyes = pose.blinking ? .sleepy : .open
+        var tilt: CGFloat = 0
+        var yawning = false
+        switch style {
+        case .plain: break
+        case .groom: eyes = .happy; tilt = -0.16
+        case .bat: tilt = 0.1
+        case .slowBlink: eyes = (0.3...0.62).contains(p) ? .sleepy : .half
+        case .yawn:
+            let wide = (0.15...0.85).contains(p)
+            eyes = wide ? .happy : .half
+            yawning = wide
+            tilt = 0.2 * sin(p * .pi)
+        case .scratch: eyes = .happy; tilt = 0.24
+        case .purr: eyes = .happy; tilt = CGFloat(sin(pose.age * 1.5)) * 0.08
+        }
+        head(center: CGPoint(x: 6, y: 42 + breath * 0.4), radius: 13.5, tilt: tilt, eyes: eyes, yawning: yawning)
 
-        if grooming {
+        switch style {
+        case .groom:
             leg(from: CGPoint(x: 12, y: 20), to: CGPoint(x: 16 + lick * 1.2, y: 33 + lick * 1.5),
                 color: coat.base.color, paw: coat.paws.color)
+        case .bat:
+            let swat = max(0, CGFloat(sin(pose.age * 7)))
+            leg(from: CGPoint(x: 12, y: 20), to: CGPoint(x: 17 + swat * 10, y: 24 + swat * 14),
+                color: coat.base.color, paw: coat.paws.color)
+            butterfly(at: CGPoint(x: 34 + CGFloat(sin(pose.age * 1.7)) * 4,
+                                  y: 44 + CGFloat(sin(pose.age * 2.3)) * 7))
+        default:
+            break
         }
     }
 
-    private func paintSleeping() {
+    // MARK: Lying down
+
+    private func paintLying(sleeping: Bool) {
         let breath = CGFloat(sin(pose.age * 1.8)) * 0.5 + 0.5
-        blob(ellipse(center: CGPoint(x: -3, y: 12 + breath * 0.6), width: 50, height: 22 + breath * 1.6))
-        paw(at: CGPoint(x: 25, y: 3), color: coat.paws.color)
-        head(center: Self.sleepingHead, radius: 12.5, tilt: -0.18, eyes: .sleepy, yawning: false)
-        tail(from: CGPoint(x: -26, y: 8),
-             c1: CGPoint(x: -26, y: -2),
-             c2: CGPoint(x: 2, y: -3),
-             to: CGPoint(x: 14, y: 3))
+        let head = Self.headPoint(for: sleeping ? .sleep : .loaf)
+        if sleeping {
+            blob(ellipse(center: CGPoint(x: -3, y: 12 + breath * 0.6), width: 50, height: 22 + breath * 1.6))
+            paw(at: CGPoint(x: 25, y: 3), color: coat.paws.color)
+            self.head(center: head, radius: 12.5, tilt: -0.18, eyes: .sleepy, yawning: false)
+            tail(from: CGPoint(x: -26, y: 8),
+                 c1: CGPoint(x: -26, y: -2),
+                 c2: CGPoint(x: 2, y: -3),
+                 to: CGPoint(x: 14, y: 3))
+        } else {
+            // A loaf: paws tucked out of sight, tail wrapped along the side.
+            blob(ellipse(center: CGPoint(x: -2, y: 13 + breath * 0.4), width: 46, height: 26 + breath))
+            tail(from: CGPoint(x: -24, y: 8),
+                 c1: CGPoint(x: -24, y: 0),
+                 c2: CGPoint(x: -2, y: -1),
+                 to: CGPoint(x: 12, y: 4 + tailSway * 0.3))
+            self.head(center: head, radius: 13, tilt: 0, eyes: pose.blinking ? .sleepy : .half, yawning: false)
+        }
+    }
+
+    // MARK: Held
+
+    /// Dangling from the scruff, legs hanging, swinging with the cursor.
+    private func paintHeld() {
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        let t = NSAffineTransform()
+        t.translateX(by: 0, yBy: Cat.scruffHeight)
+        t.rotate(byRadians: pose.swing + CGFloat(sin(pose.age * 3)) * 0.05)
+        t.translateX(by: 0, yBy: -Cat.scruffHeight)
+        t.concat()
+
+        let dangle = CGFloat(sin(pose.age * 4)) * 1.5
+        tail(from: CGPoint(x: 0, y: 16),
+             c1: CGPoint(x: 3, y: 6),
+             c2: CGPoint(x: -5, y: 2),
+             to: CGPoint(x: -2 + CGFloat(sin(pose.age * 3)) * 5, y: -4))
+        leg(from: CGPoint(x: -6, y: 20), to: CGPoint(x: -8 + dangle, y: 3),
+            color: coat.base.darker(0.1), paw: coat.paws.darker(0.1))
+        leg(from: CGPoint(x: 6, y: 20), to: CGPoint(x: 7 - dangle, y: 3),
+            color: coat.base.darker(0.1), paw: coat.paws.darker(0.1))
+        blob(ellipse(center: CGPoint(x: 0, y: 30), width: 26, height: 33)) { rect in
+            if let chest = coat.chest {
+                chest.color.setFill()
+                ellipse(center: CGPoint(x: rect.midX, y: rect.midY + 2), width: 14, height: 24).fill()
+            }
+        }
+        leg(from: CGPoint(x: -9, y: 38), to: CGPoint(x: -11 - dangle * 0.6, y: 27),
+            color: coat.base.color, paw: coat.paws.color)
+        leg(from: CGPoint(x: 9, y: 38), to: CGPoint(x: 11 + dangle * 0.6, y: 27),
+            color: coat.base.color, paw: coat.paws.color)
+        head(center: Self.headPoint(for: .held), radius: 13, tilt: 0,
+             eyes: pose.blinking ? .sleepy : .open, yawning: false)
     }
 
     // MARK: - Parts
+
+    /// A little fluttering butterfly for the cat to bat at.
+    private func butterfly(at c: CGPoint) {
+        let flap = 0.35 + 0.65 * abs(CGFloat(sin(pose.age * 16)))
+        let wing = NSColor(srgbRed: 0.98, green: 0.62, blue: 0.78, alpha: 1)
+        let edge = NSColor(srgbRed: 0.62, green: 0.25, blue: 0.42, alpha: 1)
+        for side in [-1.0, 1.0] as [CGFloat] {
+            let upper = ellipse(center: CGPoint(x: c.x + side * 3.4 * flap, y: c.y + 2), width: 6.5 * flap, height: 7)
+            let lower = ellipse(center: CGPoint(x: c.x + side * 2.6 * flap, y: c.y - 2.6), width: 4.8 * flap, height: 5)
+            for path in [upper, lower] {
+                wing.setFill()
+                path.fill()
+                path.lineWidth = 0.8
+                edge.setStroke()
+                path.stroke()
+            }
+        }
+        edge.setFill()
+        ellipse(center: c, width: 1.8, height: 8).fill()
+    }
 
     private func head(center: CGPoint, radius r: CGFloat, tilt: CGFloat, eyes: Eyes, yawning: Bool) {
         NSGraphicsContext.saveGraphicsState()
@@ -262,7 +467,7 @@ struct CatPainter {
         let w = r * 0.36
         let h = r * 0.44
         switch style {
-        case .open:
+        case .open, .half:
             let iris = ellipse(center: c, width: w, height: h)
             coat.eyes.color.setFill()
             iris.fill()
@@ -278,6 +483,22 @@ struct CatPainter {
             iris.lineWidth = 0.9
             ink.setStroke()
             iris.stroke()
+            if style == .half {
+                // A heavy, contented eyelid over the top half.
+                let lidY = c.y + h * 0.04
+                NSGraphicsContext.saveGraphicsState()
+                iris.addClip()
+                coat.base.color.setFill()
+                CGRect(x: c.x - w, y: lidY, width: w * 2, height: h).fill()
+                NSGraphicsContext.restoreGraphicsState()
+                let lid = NSBezierPath()
+                lid.move(to: CGPoint(x: c.x - w * 0.62, y: lidY))
+                lid.line(to: CGPoint(x: c.x + w * 0.62, y: lidY))
+                lid.lineWidth = 1.4
+                lid.lineCapStyle = .round
+                faceInk.setStroke()
+                lid.stroke()
+            }
         case .sleepy, .happy:
             let line = NSBezierPath()
             let dip: CGFloat = style == .happy ? h * 0.45 : -h * 0.35
