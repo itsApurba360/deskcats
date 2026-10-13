@@ -130,14 +130,14 @@ final class Cat {
         age += dt
         activityTime += dt
         updateBlink()
+        // A hesitating cat carries on with what it was doing until it sets off.
+        if trip != nil, tripDelay > 0 {
+            tripDelay -= dt
+            if tripDelay <= 0 { startTrip(area: area) }
+        }
 
         switch activity {
         case .walk, .run:
-            if tripDelay > 0 {
-                tripDelay -= dt
-                activityTime = 0
-                break
-            }
             let dx = target.x - position.x
             let dy = target.y - position.y
             let distance = hypot(dx, dy)
@@ -149,7 +149,7 @@ final class Cat {
                 legPhase += step * (activity == .run ? 0.13 : 0.2) / scale
             }
             if abs(dx) > 0.5 { facingRight = dx > 0 }
-            if let current = trip {
+            if let current = trip, tripDelay <= 0 {
                 // Off screen: a wandering cat waits out its time away, then comes back.
                 if current.leaving, current.excursion, distance < 1 {
                     trip?.away -= dt
@@ -194,7 +194,7 @@ final class Cat {
             if activityTime >= activityDuration { carryOn(area: area) }
         }
 
-        if activity != .held && activity != .falling && trip == nil {
+        if activity != .held && activity != .falling && (trip == nil || tripDelay > 0) {
             position = area.clamp(position)
         }
         updateLook(dt: dt, mouse: mouse)
@@ -234,7 +234,7 @@ final class Cat {
             tripDelay = delay
             tripRunning = Bool.random()
         }
-        startTrip(area: area)
+        if tripDelay <= 0 { startTrip(area: area) }
     }
 
     /// Now and then a cat wanders off to a neighbouring desktop for a while.
@@ -285,13 +285,14 @@ final class Cat {
         }
         activity = tripRunning ? .run : .walk
         activityTime = 0
-        walkSpeed = baseSpeed * (tripRunning ? 4 : 2)
+        // A wander is an unhurried stroll; following the user is brisker.
+        walkSpeed = baseSpeed * (trip.excursion ? (tripRunning ? 2.5 : 1) : (tripRunning ? 4 : 2))
         activityDuration = .infinity
     }
 
     /// After a pause (petting, say), a travelling cat picks up its trip again.
     private func carryOn(area: RoamArea) {
-        if trip != nil {
+        if trip != nil, tripDelay <= 0 {
             startTrip(area: area)
         } else {
             begin(pickNext(), area: area)
