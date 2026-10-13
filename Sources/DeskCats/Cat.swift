@@ -30,6 +30,8 @@ struct RoamArea {
 final class Cat {
     enum Activity: CaseIterable {
         case walk, idle, sit, sleep, stretch, groom
+        /// A quick dash, used when a cat comes back onto a newly shown Space.
+        case run
         case loaf, chaseTail, bat, slowBlink, yawn, hop, pounce, scratch
         /// Reaction to being clicked.
         case purr
@@ -84,6 +86,10 @@ final class Cat {
     private var fallTarget: CGFloat?
     private var heldVelocity: CGFloat = 0
     private var swingSpeed: CGFloat = 0
+    /// True while the cat travels back in from off screen after a Space change.
+    private var arriving = false
+    /// Seconds an arriving cat waits off screen, so cats don't come in in lockstep.
+    private var arrivalDelay: TimeInterval = 0
 
     var activityProgress: CGFloat { CGFloat(min(1, activityTime / activityDuration)) }
     var isHeld: Bool { activity == .held }
@@ -114,7 +120,12 @@ final class Cat {
         updateBlink()
 
         switch activity {
-        case .walk:
+        case .walk, .run:
+            if arrivalDelay > 0 {
+                arrivalDelay -= dt
+                activityTime = 0
+                break
+            }
             let dx = target.x - position.x
             let dy = target.y - position.y
             let distance = hypot(dx, dy)
@@ -122,10 +133,12 @@ final class Cat {
             if distance > 0.01 {
                 position.x += dx / distance * step
                 position.y += dy / distance * step
-                legPhase += step * 0.2 / scale
+                // Running takes longer strides, but at a much quicker leg cycle.
+                legPhase += step * (activity == .run ? 0.13 : 0.2) / scale
             }
             if abs(dx) > 0.5 { facingRight = dx > 0 }
             if distance < 1 || activityTime >= activityDuration {
+                arriving = false
                 begin(pickNext(), area: area)
             }
         case .hop, .pounce:
@@ -161,7 +174,7 @@ final class Cat {
             if activityTime >= activityDuration { begin(pickNext(), area: area) }
         }
 
-        if activity != .held && activity != .falling {
+        if activity != .held && activity != .falling && !arriving {
             position = area.clamp(position)
         }
         updateLook(dt: dt, mouse: mouse)
@@ -170,14 +183,37 @@ final class Cat {
     /// Keeps the cat on screen after the display arrangement or size changes.
     func reclamp(to area: RoamArea) {
         guard activity != .held && activity != .falling else { return }
-        position = area.clamp(position)
+        // An arriving cat is meant to be off screen until it walks back in.
+        if !arriving { position = area.clamp(position) }
         target = area.clamp(target)
+    }
+
+    /// Follows the user onto a newly shown Space: the cat jumps to just past the
+    /// nearer side edge, then walks or runs back to where it was after `delay` seconds.
+    func arrive(area: RoamArea, delay: TimeInterval) {
+        guard activity != .held else { return }
+        // A cat already on its way in keeps heading for the same spot.
+        let home = area.clamp(arriving ? target : position)
+        let offset = 60 * CatView.baseScale * scale
+        let fromLeft = home.x < area.screen.midX
+        position = CGPoint(x: fromLeft ? area.screen.minX - offset : area.screen.maxX + offset, y: home.y)
+        facingRight = fromLeft
+        arriving = true
+        arrivalDelay = delay
+        let running = Bool.random()
+        activity = running ? .run : .walk
+        activityTime = 0
+        target = home
+        walkSpeed = baseSpeed * (running ? 4 : 2)
+        activityDuration = Double(abs(home.x - position.x) / (walkSpeed * displayScale)) + 2
     }
 
     // MARK: - Mouse
 
     /// Picks the cat up so it dangles from the cursor at `scruff`.
     func grab(at scruff: CGPoint) {
+        arriving = false
+        arrivalDelay = 0
         activity = .held
         activityTime = 0
         activityDuration = 1
@@ -206,6 +242,8 @@ final class Cat {
 
     /// A click without a drag: the cat purrs and shows hearts.
     func pet(area: RoamArea) {
+        arriving = false
+        arrivalDelay = 0
         begin(.purr, area: area)
     }
 
@@ -220,6 +258,9 @@ final class Cat {
             walkSpeed = baseSpeed * (Double.random(in: 0...1) < 0.15 * energy ? 1.8 : 1)
             let distance = hypot(target.x - position.x, target.y - position.y)
             activityDuration = Double(distance / (walkSpeed * displayScale)) + 2
+        case .run:
+            // Only `arrive` starts a run; it sets the target and speed itself.
+            activityDuration = 1
         case .idle: activityDuration = .random(in: 1.5...5)
         case .sit: activityDuration = .random(in: 4...12)
         case .sleep: activityDuration = .random(in: 15...45)
@@ -339,7 +380,7 @@ final class Cat {
             goal = CGVector(dx: 0, dy: -0.5)
         case .bat:
             goal = CGVector(dx: facingRight ? 0.7 : -0.7, dy: 0.5)
-        case .sleep, .chaseTail, .hop, .pounce:
+        case .sleep, .chaseTail, .hop, .pounce, .run:
             break
         default:
             if distance < 260 * displayScale {

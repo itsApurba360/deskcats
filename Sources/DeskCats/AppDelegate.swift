@@ -58,6 +58,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(screensChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        // Swiping to another desktop or full-screen app, closing a full-screen app,
+        // and removing a desktop all switch the active Space.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(spaceChanged),
+            name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
         quitOnSignals()
     }
 
@@ -117,6 +122,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CatViewDelegate {
         updateArea(for: screen)
         for view in cats {
             view.cat.reclamp(to: area)
+            view.syncFrame()
+        }
+        spaceChanged()
+    }
+
+    /// The cats follow the user onto the Space they just landed on, walking or
+    /// running in from the side, a moment apart.
+    @objc private func spaceChanged() {
+        for view in cats where view !== dragged {
+            view.cat.arrive(area: area, delay: .random(in: 0...0.9))
             view.syncFrame()
         }
     }

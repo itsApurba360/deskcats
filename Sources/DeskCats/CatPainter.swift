@@ -54,6 +54,8 @@ struct CatPainter {
         switch pose.activity {
         case .walk:
             paintStanding(Stance(walking: true, legPhase: pose.legPhase))
+        case .run:
+            paintStanding(Stance(walking: true, running: true, legPhase: pose.legPhase))
         case .idle:
             paintStanding(Stance())
         case .stretch:
@@ -106,6 +108,8 @@ struct CatPainter {
     /// Knobs for every four-legged pose.
     private struct Stance {
         var walking = false
+        /// A dash: longer strides, a bigger bounce, and the tail streaming out behind.
+        var running = false
         var legPhase: CGFloat = 0
         /// Stretch: front end down, rear up.
         var bow: CGFloat = 0
@@ -148,7 +152,8 @@ struct CatPainter {
         }
 
         let phase = s.legPhase
-        let bob = s.walking ? abs(sin(phase)) * 1.4 : CGFloat(sin(pose.age * 2.2)) * 0.4
+        let bob = s.running ? abs(sin(phase)) * 3.2
+            : s.walking ? abs(sin(phase)) * 1.4 : CGFloat(sin(pose.age * 2.2)) * 0.4
         let hipY = 20 + bob + s.bow * 4 - s.crouch * 7
         let shoulderY = 20 + bob - s.bow * 9 - s.crouch * 6
         let hip = CGPoint(x: -13 + s.wiggle, y: hipY)
@@ -158,8 +163,8 @@ struct CatPainter {
         func foot(_ x: CGFloat, _ phase: CGFloat, front: Bool) -> CGPoint {
             var p = CGPoint(x: x, y: 3 + s.tuck * 8)
             if s.walking {
-                p.x += sin(phase) * 7
-                p.y += max(0, cos(phase)) * 3.5
+                p.x += sin(phase) * (s.running ? 12 : 7)
+                p.y += max(0, cos(phase)) * (s.running ? 6 : 3.5)
             }
             p.x += s.leap * (front ? 11 : -9)
             p.y += s.leap * (front ? 6 : 4)
@@ -168,7 +173,7 @@ struct CatPainter {
 
         // Tail first: it sits behind everything.
         let tailBase = CGPoint(x: hip.x - 8, y: hipY + 3)
-        let lift = s.walking ? 0 : s.bow * 6
+        let lift = s.running ? -14 : s.walking ? 0 : s.bow * 6
         let twitch = s.crouch * CGFloat(sin(pose.age * 12)) * 3
         let curl = s.tailCurl
         tail(from: tailBase,

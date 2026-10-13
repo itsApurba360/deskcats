@@ -5,7 +5,7 @@ import AppKit
 @MainActor
 enum PoseSheet {
     private static let poses: [(Cat.Activity, CGFloat, CGFloat)] = [
-        (.walk, 0, 0.9), (.idle, 0, 0), (.sit, 0, 0), (.groom, 0, 0), (.stretch, 0.5, 0),
+        (.walk, 0, 0.9), (.run, 0, 0.9), (.idle, 0, 0), (.sit, 0, 0), (.groom, 0, 0), (.stretch, 0.5, 0),
         (.sleep, 0, 0), (.loaf, 0, 0), (.chaseTail, 0, 0), (.bat, 0, 0), (.slowBlink, 0.8, 0),
         (.yawn, 0.5, 0), (.hop, 0.5, 0), (.pounce, 0.3, 0), (.pounce, 0.7, 0), (.scratch, 0, 0),
         (.purr, 0, 0), (.held, 0, 0),

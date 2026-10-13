@@ -340,6 +340,8 @@ private final class CatRig {
         switch cat.activity {
         case .walk:
             walk(&pose, phase: cat.legPhase, stride: 0.42)
+        case .run:
+            run(&pose, phase: cat.legPhase)
         case .idle:
             pose.bodyDrop = CGFloat(sin(age * 2)) * 0.3
         case .chaseTail:
@@ -411,6 +413,17 @@ private final class CatRig {
                      .planted(stride * 12 * b), .planted(stride * 12 * a)]
         pose.bodyDrop = abs(cos(phase)) * 1.2 - 0.6
         pose.headShift.y = abs(cos(phase)) * 0.8
+    }
+
+    private func run(_ pose: inout Pose, phase: CGFloat) {
+        // A bounding gallop: front legs together, back legs together, half a beat apart.
+        let front = sin(phase), back = sin(phase + .pi * 0.6)
+        pose.legs = [.planted(9 * front), .planted(9 * front), .planted(9 * back), .planted(9 * back)]
+        pose.lift = abs(sin(phase)) * 3
+        pose.pitch = CGFloat(cos(phase)) * 0.08
+        pose.headShift.y = abs(cos(phase)) * 1.2
+        pose.tailBase = 1.35
+        pose.tailSway = CGFloat(sin(phase)) * 0.15
     }
 
     private func sit(_ pose: inout Pose, cat: Cat, p: CGFloat) {

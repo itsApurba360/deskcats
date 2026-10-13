@@ -13,6 +13,8 @@ sit, groom, stretch, yawn, nap (with little "z"s), loaf with their paws tucked,
 slow-blink at you, chase their tails, bat at a butterfly, hop, pounce, and
 scratch behind an ear. Their eyes follow your mouse pointer when it comes near.
 
+When you switch desktops or full-screen apps (or close one), the cats follow you: each one walks or runs in from the side of the screen back to its spot.
+
 ## Playing with the cats
 
 - **Pick one up**: press on a cat and drag. It dangles by the scruff and

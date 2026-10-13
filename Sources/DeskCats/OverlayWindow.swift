@@ -13,10 +13,12 @@ final class OverlayWindow: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
+        // Status-bar level stays above full-screen app windows too.
         level = .statusBar
         // Every click, scroll, and drag passes straight through to the windows underneath.
         ignoresMouseEvents = true
-        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        // Joins every Space, including full-screen apps' Spaces.
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
         let content = OverlayView(frame: CGRect(origin: .zero, size: screen.frame.size))
